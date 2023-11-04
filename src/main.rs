@@ -63,6 +63,11 @@ enum currentMode {
     Writing,
 }
 
+enum PortCommand {
+    conn(String),
+    sendData(String),
+}
+
 fn main() -> Result<()> {
     // let output = "AT\r\n".as_bytes();
     // port.write(output).expect("Write failed!");
@@ -103,6 +108,8 @@ fn main() -> Result<()> {
     });
     let mut last_line = String::new();
     let mut textarea = TextArea::default();
+    // textarea.set_style(Style::default().bg(Color::Yellow));
+    textarea.set_block(Block::default().borders(Borders::ALL));
     port_tx.send(app.selected_port(0).unwrap().port_name.clone());
     loop {
         terminal.draw(|frame| {

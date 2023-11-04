@@ -47,11 +47,6 @@ impl App {
         self.is_active = !self.is_active;
     }
 
-    // pub fn select_port(& mut self) {
-    //     //, port: &'a SerialPortInfo
-    //     self.selected_port = Some(&self.ports[0]);
-    // }
-
     pub fn selected_port(&self, idx: usize) -> Option<&SerialPortInfo> {
         Some(&self.ports[idx])
     }
@@ -69,30 +64,9 @@ enum currentMode {
 }
 
 fn main() -> Result<()> {
-    // let ports = serialport::available_ports().expect("No ports found!");
-    // for p in &ports {
-    //     println!("{}", p.port_name);
-    // }
-
-    // let mut port = serialport::new(&ports[0].port_name, 115_200)
-    // .timeout(Duration::from_millis(10))
-    // .open().expect("Failed to open port");
-
     // let output = "AT\r\n".as_bytes();
     // port.write(output).expect("Write failed!");
 
-    // let mut serial_buf: Vec<u8> = vec![0; 100];
-    // loop {
-    //     if let Ok(size) = port.read(serial_buf.as_mut_slice()){
-    //         println!("{}",String::from_utf8(serial_buf.to_ascii_lowercase()).unwrap());
-    //     }
-    //     else{
-    //         // break;
-    //     }
-    //     sleep(Duration::from_millis(100));
-    // }
-
-    // println!("Hello, world!");
     let (tx, rx) = channel::<String>();
     let (port_tx, port_rx) = channel::<String>();
     stdout().execute(EnterAlternateScreen)?;
@@ -125,8 +99,6 @@ fn main() -> Result<()> {
             } else {
                 // break;
             }
-
-            // if let Ok(new_line) = rx.recv_timeout(10) {}
         }
     });
     let mut last_line = String::new();

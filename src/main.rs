@@ -4,11 +4,16 @@ use crossterm::{
     ExecutableCommand,
 };
 use ratatui::{
-    prelude::{Alignment, Backend, Constraint, CrosstermBackend, Direction, Layout, Terminal},
+    prelude::{
+        Alignment, Backend, Constraint, CrosstermBackend, Direction, Layout, Margin, Terminal,
+    },
     style::{Color, Modifier, Style},
-    symbols,
+    symbols::{self, scrollbar},
     text::Text,
-    widgets::{Block, Borders, List, ListItem, ListState, Paragraph},
+    widgets::{
+        Block, Borders, List, ListItem, ListState, Paragraph, Scrollbar, ScrollbarOrientation,
+        ScrollbarState,
+    },
 };
 use serialport::SerialPortInfo;
 use std::{
@@ -47,6 +52,7 @@ struct App {
     ports_data: Vec<Port>,
     active_port_idx: usize,
     mode: currentMode,
+    v_scroll: usize,
 }
 
 impl App {
@@ -59,6 +65,7 @@ impl App {
             ports_data: Vec::new(),
             active_port_idx: 0,
             mode: currentMode::Main,
+            v_scroll: 0,
         }
     }
 
@@ -167,6 +174,8 @@ fn main() -> Result<()> {
         .map(|p| ListItem::new(p.port_name.clone()))
         .collect();
     let mut state = ListState::default();
+    let mut scrollbar_state = ScrollbarState::default();
+
     if accessible_ports.len() >= 0 {
         state.select(Some(0));
     }
@@ -255,6 +264,20 @@ fn main() -> Result<()> {
                 ),
                 io_box[0],
             );
+
+            scrollbar_state = scrollbar_state.content_length(len);
+            frame.render_stateful_widget(
+                Scrollbar::default()
+                    .orientation(ScrollbarOrientation::VerticalRight)
+                    // .track_symbol(Some("▯")),
+                    .symbols(scrollbar::VERTICAL),
+                // .thumb_symbol("▮"),
+                io_box[0].inner(&Margin {
+                    vertical: 0,
+                    horizontal: 0,
+                }),
+                &mut scrollbar_state,
+            );
             textarea.set_block(
                 if app.mode == currentMode::Writing {
                     selected_block.clone()
@@ -287,6 +310,8 @@ fn main() -> Result<()> {
         if let Ok((port_name, recv_data)) = rx.recv_timeout(Duration::from_millis(2)) {
             // app.scroll_buffer.push_back(recv_data);
             app.add_data_with_name(port_name, recv_data);
+            app.v_scroll += app.v_scroll.saturating_add(1);
+            scrollbar_state = scrollbar_state.position(app.v_scroll);
         }
 
         // if let Ok((port_name, recv_data)) = result_rx.recv_timeout(Duration::from_millis(3)) {

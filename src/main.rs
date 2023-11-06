@@ -51,7 +51,7 @@ struct App {
     // scroll_buffer: VecDeque<String>,
     ports_data: Vec<Port>,
     active_port_idx: usize,
-    mode: currentMode,
+    mode: Mode,
     v_scroll: usize,
 }
 
@@ -64,7 +64,7 @@ impl App {
             // scroll_buffer: VecDeque::with_capacity(1000),
             ports_data: Vec::new(),
             active_port_idx: 0,
-            mode: currentMode::Main,
+            mode: Mode::Main,
             v_scroll: 0,
         }
     }
@@ -99,7 +99,7 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> io::Result<
 }
 
 #[derive(PartialEq)]
-enum currentMode {
+enum Mode {
     Main,
     Term,
     Listing,
@@ -188,6 +188,9 @@ fn main() -> Result<()> {
             false,
         ))
     }
+    let mut temp_v_scroll = 0;
+    let mut len = 0;
+
     loop {
         terminal.draw(|frame| {
             let chunks = Layout::default()
@@ -216,7 +219,7 @@ fn main() -> Result<()> {
                 .border_style(Style::default().fg(Color::LightGreen))
                 .borders(Borders::ALL);
             let title = Paragraph::new(Text::styled(
-                "determ",
+                "⏱ determ",
                 Style::default().fg(Color::LightYellow),
             ))
             .alignment(Alignment::Center);
@@ -226,12 +229,12 @@ fn main() -> Result<()> {
             frame.render_stateful_widget(
                 List::new(accessible_ports.clone())
                     .block(
-                        if app.mode == currentMode::Listing {
+                        if app.mode == Mode::Listing {
                             selected_block.clone()
                         } else {
                             title_block.clone()
                         }
-                        .title("| ports |"),
+                        .title("╮ ports ╭"),
                     )
                     .style(Style::default().fg(Color::White))
                     .highlight_style(
@@ -239,15 +242,22 @@ fn main() -> Result<()> {
                             .add_modifier(Modifier::ITALIC)
                             .bg(Color::LightGreen),
                     )
-                    .highlight_symbol(symbols::block::FIVE_EIGHTHS),
+                    .highlight_symbol("●"),
                 middle[0],
                 &mut state,
             );
 
-            let len = app.ports_data[app.active_port_idx].scroll_buffer.len();
+            if app.v_scroll <= 0 {
+                len = app.ports_data[app.active_port_idx].scroll_buffer.len();
+            }
+            scrollbar_state = scrollbar_state
+                .content_length(app.ports_data[app.active_port_idx].scroll_buffer.len());
+
             last_line = "".to_owned();
             if len > 1 {
-                for i in (len - (io_box[0].height as usize)).max(0)..(len) {
+                for i in (len - app.v_scroll - (io_box[0].height as usize)).max(0)
+                    ..(len.saturating_sub(app.v_scroll))
+                {
                     last_line += app.ports_data[app.active_port_idx].scroll_buffer[i].as_str();
                 }
             } else {
@@ -255,23 +265,20 @@ fn main() -> Result<()> {
             }
             frame.render_widget(
                 Paragraph::new(last_line.clone()).block(
-                    if app.mode == currentMode::Term {
+                    if app.mode == Mode::Term {
                         selected_block.clone()
                     } else {
                         title_block.clone()
                     }
-                    .title(main_block_title.clone()),
+                    .title(format!("╮ {} ╭", main_block_title.clone())),
                 ),
                 io_box[0],
             );
 
-            scrollbar_state = scrollbar_state.content_length(len);
             frame.render_stateful_widget(
                 Scrollbar::default()
                     .orientation(ScrollbarOrientation::VerticalRight)
-                    // .track_symbol(Some("▯")),
                     .symbols(scrollbar::VERTICAL),
-                // .thumb_symbol("▮"),
                 io_box[0].inner(&Margin {
                     vertical: 0,
                     horizontal: 0,
@@ -279,12 +286,12 @@ fn main() -> Result<()> {
                 &mut scrollbar_state,
             );
             textarea.set_block(
-                if app.mode == currentMode::Writing {
+                if app.mode == Mode::Writing {
                     selected_block.clone()
                 } else {
                     title_block.clone()
                 }
-                .title("| write message |"),
+                .title("╮ write message ╭"),
             );
             frame.render_widget(textarea.widget(), io_box[1]);
 
@@ -294,30 +301,16 @@ fn main() -> Result<()> {
                 .constraints([Constraint::Percentage(100)])
                 .split(chunks[2]);
 
-            // frame.render_widget(
-            //     Paragraph::new("Quit: Ctrl + q")
-            //         .style(Style::default().fg(Color::Black))
-            //         .alignment(Alignment::Center), // .block(title_block.clone())
-            //     chunks[2],
-            // );
             frame.render_widget(
-                Paragraph::new("  quit: Ctrl + q")
+                Paragraph::new("  quit ▶ Ctrl + q")
                     .style(Style::default().bg(Color::LightGreen).fg(Color::White)),
                 chunks[2],
             );
         })?;
 
         if let Ok((port_name, recv_data)) = rx.recv_timeout(Duration::from_millis(2)) {
-            // app.scroll_buffer.push_back(recv_data);
             app.add_data_with_name(port_name, recv_data);
-            app.v_scroll += app.v_scroll.saturating_add(1);
-            scrollbar_state = scrollbar_state.position(app.v_scroll);
         }
-
-        // if let Ok((port_name, recv_data)) = result_rx.recv_timeout(Duration::from_millis(3)) {
-        //     // app.scroll_buffer.push_back(recv_data);
-        //     app.add_data_with_name(port_name, recv_data);
-        // }
 
         if event::poll(std::time::Duration::from_millis(16))? {
             if let event::Event::Key(key) = event::read()? {
@@ -327,16 +320,37 @@ fn main() -> Result<()> {
                 {
                     break;
                 }
+
                 if key.kind == KeyEventKind::Press {
-                    if app.mode == currentMode::Main {
-                        if key.code == KeyCode::Left {
-                            app.mode = currentMode::Listing;
-                        } else if key.code == KeyCode::Right {
-                            app.mode = currentMode::Term;
+                    if app.mode != Mode::Listing
+                        && (key.code == KeyCode::Up
+                            || key.code == KeyCode::Down
+                            || key.code == KeyCode::End)
+                    {
+                        if key.code == KeyCode::Up {
+                            app.v_scroll = app.v_scroll.saturating_add(1);
+                            scrollbar_state = scrollbar_state.position(app.v_scroll);
+                            // break;
                         } else if key.code == KeyCode::Down {
-                            app.mode = currentMode::Writing;
+                            app.v_scroll = app.v_scroll.saturating_sub(1);
+                            scrollbar_state = scrollbar_state.position(app.v_scroll);
+                            // break;
+                        } else if key.code == KeyCode::End {
+                            app.v_scroll = 0;
+                            scrollbar_state = scrollbar_state.position(app.v_scroll);
+                            // break;
                         }
-                    } else if app.mode == currentMode::Listing {
+                        continue;
+                    }
+                    if app.mode == Mode::Main {
+                        if key.code == KeyCode::Left {
+                            app.mode = Mode::Listing;
+                        } else if key.code == KeyCode::Right {
+                            app.mode = Mode::Term;
+                        } else if key.code == KeyCode::Down {
+                            app.mode = Mode::Writing;
+                        }
+                    } else if app.mode == Mode::Listing {
                         let idx: usize = state.selected().unwrap_or(0);
                         if key.code == KeyCode::Down {
                             if idx < accessible_ports.len() - 1 {
@@ -345,9 +359,9 @@ fn main() -> Result<()> {
                                 state.select(Some(0));
                             }
                         } else if key.code == KeyCode::Right {
-                            app.mode = currentMode::Writing;
+                            app.mode = Mode::Writing;
                         } else if key.code == KeyCode::Left {
-                            app.mode = currentMode::Term;
+                            app.mode = Mode::Term;
                         } else if key.code == KeyCode::Up {
                             if idx > 0 {
                                 state.select(Some(idx - 1));
@@ -368,19 +382,19 @@ fn main() -> Result<()> {
                                 }
                             }
                         }
-                    } else if app.mode == currentMode::Writing {
+                    } else if app.mode == Mode::Writing {
                         if key.code == KeyCode::Left {
-                            app.mode = currentMode::Listing;
+                            app.mode = Mode::Listing;
                         } else if key.code == KeyCode::Up {
-                            app.mode = currentMode::Term;
+                            app.mode = Mode::Term;
                         } else {
                             textarea.input(key);
                         }
-                    } else if app.mode == currentMode::Term {
+                    } else if app.mode == Mode::Term {
                         if key.code == KeyCode::Left {
-                            app.mode = currentMode::Listing;
+                            app.mode = Mode::Listing;
                         } else if key.code == KeyCode::Right {
-                            app.mode = currentMode::Writing;
+                            app.mode = Mode::Writing;
                         } else {
                             // textarea.input(key);
                         }

@@ -1,5 +1,6 @@
 # determ
-Certainly! Here's an example of a project description for your serial port communication application:
+
+![alt text](./images/determ.png?raw=true)
 
 ## Serial Port Communication Application
 The Serial Port Communication Application is a command-line tool designed to facilitate communication with devices connected to serial ports. It provides a user-friendly interface for reading data from serial ports, listing active and available ports, and writing data to the ports.

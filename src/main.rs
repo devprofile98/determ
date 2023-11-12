@@ -1,3 +1,4 @@
+use core::panic;
 use crossterm::{
     event::{self, KeyCode, KeyEventKind, KeyModifiers},
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
@@ -27,6 +28,8 @@ use std::{
     time::Duration,
 };
 use tui_textarea::TextArea;
+
+mod serial;
 
 struct Port {
     name: String,
@@ -127,42 +130,8 @@ fn main() -> Result<()> {
     // TODO main loop
     let mut app = App::new();
     app.is_active = true;
-    // app.select_port();
-    let c_tx = tx.clone();
-    let thread = std::thread::spawn(move || {
-        let mut port_name = String::new();
-        port_name = port_rx.recv().expect("Failed to read the port");
-        let mut port = serialport::new(&port_name, 115_200)
-            .timeout(Duration::from_millis(10))
-            .open()
-            .expect("Failed to open port");
-        let mut serial_buf: Vec<u8> = vec![0; 300];
-        while true {
-            if let Ok(port_name) = port_rx.recv_timeout(Duration::from_millis(10)) {
-                match serialport::new(&port_name, 115_200)
-                    .timeout(Duration::from_millis(10))
-                    .open()
-                {
-                    Ok(p) => {
-                        port = p;
-                        result_tx.send((port_name.clone(), true));
-                    }
-                    Err(_e) => {
-                        result_tx.send((port_name.clone(), false));
-                    }
-                }
-            }
-            // for port in
-            if let Ok(size) = port.read(serial_buf.as_mut_slice()) {
-                c_tx.send((
-                    port_name.clone(),
-                    String::from_utf8(serial_buf.to_ascii_lowercase()).unwrap_or_default(),
-                ));
-            } else {
-                // break;
-            }
-        }
-    });
+    let thread = serial::serial_thread(tx.clone(), port_rx, result_tx);
+
     let mut last_line = String::new();
     let mut main_block_title = "Not active".to_owned();
     let mut textarea = TextArea::default();
@@ -259,6 +228,7 @@ fn main() -> Result<()> {
                     ..(len.saturating_sub(app.v_scroll))
                 {
                     last_line += app.ports_data[app.active_port_idx].scroll_buffer[i].as_str();
+                    last_line += "\n";
                 }
             } else {
                 last_line = format!("{}", io_box[0].height);
@@ -376,10 +346,17 @@ fn main() -> Result<()> {
                                     .clone()
                                     .send(app.ports[state.selected().unwrap()].port_name.clone())
                                 {
+                                    panic!("{}", _e);
                                 } else {
                                     main_block_title =
                                         app.ports[state.selected().unwrap()].port_name.clone();
                                 }
+                            } else {
+                                port_tx
+                                    .clone()
+                                    .send(app.ports[state.selected().unwrap()].port_name.clone());
+                                main_block_title = "here".to_owned();
+                                // app.ports[state.selected().unwrap()].port_name.clone();
                             }
                         }
                     } else if app.mode == Mode::Writing {

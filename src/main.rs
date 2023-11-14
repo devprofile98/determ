@@ -224,8 +224,10 @@ fn main() -> Result<()> {
 
             last_line = "".to_owned();
             if len > 1 {
-                for i in (len - app.v_scroll - (io_box[0].height as usize)).max(0)
-                    ..(len.saturating_sub(app.v_scroll))
+                for i in (len
+                    .saturating_sub(app.v_scroll)
+                    .saturating_sub(io_box[0].height as usize))
+                .max(0)..(len.saturating_sub(app.v_scroll))
                 {
                     last_line += app.ports_data[app.active_port_idx].scroll_buffer[i].as_str();
                     last_line += "\n";
@@ -355,8 +357,9 @@ fn main() -> Result<()> {
                                 port_tx
                                     .clone()
                                     .send(app.ports[state.selected().unwrap()].port_name.clone());
-                                main_block_title = "here".to_owned();
-                                // app.ports[state.selected().unwrap()].port_name.clone();
+                                main_block_title =
+                                    app.ports[state.selected().unwrap()].port_name.clone();
+                                // ;
                             }
                         }
                     } else if app.mode == Mode::Writing {

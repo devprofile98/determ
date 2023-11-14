@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     sync::mpsc::{Receiver, Sender},
     thread::JoinHandle,
     time::Duration,
@@ -58,6 +59,7 @@ pub fn serial_thread(
     port_rx: Receiver<String>,
     result_tx: Sender<(String, bool)>,
 ) -> JoinHandle<()> {
+    let mut serial_bookkeeping = HashMap::new();
     std::thread::spawn(move || {
         let mut port_name = String::new();
         port_name = port_rx.recv().expect("Failed to read the port");
@@ -65,25 +67,40 @@ pub fn serial_thread(
             .timeout(Duration::from_millis(10))
             .open()
             .expect("Failed to open port");
+        serial_bookkeeping.insert(port_name.clone(), port);
         loop {
             if let Ok(port_nam) = port_rx.recv_timeout(Duration::from_millis(10)) {
-                match serialport::new(&port_nam, 115_200)
-                    .timeout(Duration::from_millis(10))
-                    .open()
-                {
-                    Ok(p) => {
-                        // panic!("sdfsdfsdf");
-                        port = p;
-                        result_tx.send((port_nam.clone(), true));
-                    }
-                    Err(_e) => {
-                        // result_tx.send((port_name.clone(), false));
-                        panic!("{}", _e);
+                if let Some(tmp_port) = serial_bookkeeping.get_mut(&port_nam.clone()) {
+                    port_name = port_nam.clone();
+                } else {
+                    match serialport::new(&port_nam, 115_200)
+                        .timeout(Duration::from_millis(10))
+                        .open()
+                    {
+                        Ok(p) => {
+                            // panic!("sdfsdfsdf");
+                            // port = p;
+                            port_name = port_nam.clone();
+                            serial_bookkeeping.insert(port_name.clone(), p);
+
+                            result_tx.send((port_nam.clone(), true));
+                        }
+                        Err(_e) => {
+                            // result_tx.send((port_name.clone(), false));
+                            panic!("{}", _e);
+                        }
                     }
                 }
+            } else {
             }
-
-            if let Some(line_data) = read_line(&mut port) {
+            // problem lies here, if we connect to a non responding port
+            // then the loop stays here and never got a chance to go up again
+            // at begining of the loop and connect to the next port, so we should
+            // other techniques to make the change port api like an interrupt
+            // so, immediatly after changing port, we should switch the port profile
+            if let Some(line_data) =
+                read_line(serial_bookkeeping.get_mut(&port_name.clone()).unwrap())
+            {
                 ui_tx.send((port_name.clone(), line_data));
             }
         }

@@ -9,22 +9,20 @@ use ratatui::{
         Alignment, Backend, Constraint, CrosstermBackend, Direction, Layout, Margin, Terminal,
     },
     style::{Color, Modifier, Style},
-    symbols::{self, scrollbar},
+    symbols::scrollbar,
     text::Text,
     widgets::{
         Block, Borders, List, ListItem, ListState, Paragraph, Scrollbar, ScrollbarOrientation,
         ScrollbarState,
     },
 };
+use serial::portCommand;
 use serialport::SerialPortInfo;
 use std::{
     collections::VecDeque,
     io,
     io::{stdout, Result},
-    ops::{Add, Range},
-    string,
-    sync::mpsc::channel,
-    thread::sleep,
+    sync::{mpsc::channel, Arc, Mutex},
     time::Duration,
 };
 use tui_textarea::TextArea;
@@ -80,11 +78,11 @@ impl App {
         Some(&self.ports[idx])
     }
     fn add_data_with_name(&mut self, name: String, data: String) {
-        for i in self.ports_data.iter_mut() {
-            if i.name == name {
-                i.scroll_buffer.push_back(data.clone());
-            }
-        }
+        // for i in self.ports_data.iter_mut() {
+        // if i.name == name {
+        self.ports_data[0].scroll_buffer.push_back(data.clone());
+        //     }
+        // }
     }
 
     fn is_port_open(&self, name: String) -> bool {
@@ -110,17 +108,12 @@ enum Mode {
     Writing,
 }
 
-enum PortCommand {
-    conn(String),
-    sendData(String),
-}
-
 fn main() -> Result<()> {
     // let output = "AT\r\n".as_bytes();
     // port.write(output).expect("Write failed!");
 
     let (tx, rx) = channel::<(String, String)>();
-    let (port_tx, port_rx) = channel::<String>();
+    let (port_tx, port_rx) = channel::<portCommand>();
     let (result_tx, result_rx) = channel::<(String, bool)>();
     stdout().execute(EnterAlternateScreen)?;
     enable_raw_mode()?;
@@ -130,7 +123,8 @@ fn main() -> Result<()> {
     // TODO main loop
     let mut app = App::new();
     app.is_active = true;
-    let thread = serial::serial_thread(tx.clone(), port_rx, result_tx);
+    let stop_flag = Arc::new(Mutex::new(false));
+    let thread = serial::serial_thread(tx.clone(), port_rx, result_tx, stop_flag.clone());
 
     let mut last_line = String::new();
     let mut main_block_title = "Not active".to_owned();
@@ -149,7 +143,9 @@ fn main() -> Result<()> {
         state.select(Some(0));
     }
 
-    if let Err(_e) = port_tx.send(app.selected_port(0).unwrap().port_name.clone()) {
+    if let Err(_e) = port_tx.send(portCommand::ChangePort(
+        app.selected_port(0).unwrap().port_name.clone(),
+    )) {
     } else {
         main_block_title = app.selected_port(0).unwrap().port_name.clone();
         app.ports_data.push(Port::new(
@@ -280,11 +276,11 @@ fn main() -> Result<()> {
             );
         })?;
 
-        if let Ok((port_name, recv_data)) = rx.recv_timeout(Duration::from_millis(2)) {
+        if let Ok((port_name, recv_data)) = rx.recv_timeout(Duration::from_millis(1)) {
             app.add_data_with_name(port_name, recv_data);
         }
 
-        if event::poll(std::time::Duration::from_millis(16))? {
+        if event::poll(std::time::Duration::from_millis(10))? {
             if let event::Event::Key(key) = event::read()? {
                 if key.kind == KeyEventKind::Press
                     && key.code == KeyCode::Char('q')
@@ -341,32 +337,45 @@ fn main() -> Result<()> {
                                 state.select(Some(accessible_ports.len() - 1));
                             }
                         } else if key.code == KeyCode::Enter {
+                            *stop_flag.lock().unwrap() = true;
                             if !app.is_port_open(
                                 app.ports[state.selected().unwrap()].port_name.clone(),
                             ) {
-                                if let Err(_e) = port_tx
-                                    .clone()
-                                    .send(app.ports[state.selected().unwrap()].port_name.clone())
-                                {
+                                if let Err(_e) = port_tx.clone().send(portCommand::ChangePort(
+                                    app.ports[state.selected().unwrap()].port_name.clone(),
+                                )) {
                                     panic!("{}", _e);
                                 } else {
                                     main_block_title =
                                         app.ports[state.selected().unwrap()].port_name.clone();
                                 }
                             } else {
-                                port_tx
-                                    .clone()
-                                    .send(app.ports[state.selected().unwrap()].port_name.clone());
+                                port_tx.clone().send(portCommand::ChangePort(
+                                    app.ports[state.selected().unwrap()].port_name.clone(),
+                                ));
                                 main_block_title =
                                     app.ports[state.selected().unwrap()].port_name.clone();
-                                // ;
                             }
                         }
                     } else if app.mode == Mode::Writing {
-                        if key.code == KeyCode::Left {
+                        if key.code == KeyCode::Enter {
+                            let mut tmp_data = textarea.lines()[0].clone();
+                            tmp_data.push('\n');
+                            port_tx.send(portCommand::Write(tmp_data));
+                            textarea.delete_line_by_head();
+                            *stop_flag.lock().unwrap() = true;
+                        } else if key.code == KeyCode::Left {
                             app.mode = Mode::Listing;
                         } else if key.code == KeyCode::Up {
                             app.mode = Mode::Term;
+                        } else if key.code == KeyCode::Char('z')
+                            && key.modifiers == KeyModifiers::CONTROL
+                        {
+                            let mut tmp_data = textarea.lines()[0].clone();
+                            tmp_data.push(26 as char);
+                            port_tx.send(portCommand::Write(tmp_data));
+                            textarea.delete_line_by_head();
+                            *stop_flag.lock().unwrap() = true;
                         } else {
                             textarea.input(key);
                         }

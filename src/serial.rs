@@ -10,8 +10,14 @@ use std::{
 
 use serialport::SerialPort;
 
+pub enum cmdType {
+    Dtr(bool),
+    Rts(bool),
+    Raw(String),
+}
+
 pub enum portCommand {
-    Write(String),
+    Write(cmdType),
     ChangePort(String),
 }
 
@@ -120,11 +126,31 @@ pub fn serial_thread(
                             }
                         }
                     }
-                    portCommand::Write(data) => {
-                        if let Some(tmp_port) = serial_bookkeeping.get_mut(&port_name.clone()) {
-                            ui_tx.send((port_name.clone(), data.clone()));
-                            tmp_port.write(data.as_bytes());
-                            tmp_port.flush();
+                    portCommand::Write(cmd) => {
+                        match cmd {
+                            cmdType::Raw(data) => {
+                                if let Some(tmp_port) =
+                                    serial_bookkeeping.get_mut(&port_name.clone())
+                                {
+                                    ui_tx.send((port_name.clone(), data.clone()));
+                                    tmp_port.write(data.as_bytes());
+                                    // tmp_port.write_data_terminal_ready(level)
+                                }
+                            }
+                            cmdType::Dtr(level) => {
+                                if let Some(tmp_port) =
+                                    serial_bookkeeping.get_mut(&port_name.clone())
+                                {
+                                    tmp_port.write_data_terminal_ready(level);
+                                }
+                            }
+                            cmdType::Rts(level) => {
+                                if let Some(tmp_port) =
+                                    serial_bookkeeping.get_mut(&port_name.clone())
+                                {
+                                    tmp_port.write_request_to_send(level);
+                                }
+                            }
                         }
                     }
                 }

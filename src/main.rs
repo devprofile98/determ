@@ -5,16 +5,18 @@ use crossterm::{
     ExecutableCommand,
 };
 use ratatui::{
+    layout::Rect,
     prelude::{
         Alignment, Backend, Constraint, CrosstermBackend, Direction, Layout, Margin, Terminal,
     },
     style::{Color, Modifier, Style},
     symbols::scrollbar,
-    text::Text,
+    text::{Line, Span, Text},
     widgets::{
         Block, Borders, List, ListItem, ListState, Paragraph, Scrollbar, ScrollbarOrientation,
         ScrollbarState,
     },
+    Frame,
 };
 use serial::portCommand;
 use serialport::SerialPortInfo;
@@ -33,6 +35,8 @@ struct Port {
     name: String,
     paused: bool,
     scroll_buffer: VecDeque<String>,
+    rts: bool,
+    dtr: bool,
 }
 
 impl Port {
@@ -41,15 +45,15 @@ impl Port {
             name,
             paused,
             scroll_buffer: VecDeque::with_capacity(1000),
+            rts: false,
+            dtr: false,
         }
     }
 }
 
 struct App {
     ports: Vec<SerialPortInfo>,
-    // selected_port: Option<& SerialPortInfo>,
     is_active: bool,
-    // scroll_buffer: VecDeque<String>,
     ports_data: Vec<Port>,
     active_port_idx: usize,
     mode: Mode,
@@ -222,11 +226,23 @@ fn main() -> Result<()> {
             if len > 1 {
                 for i in (len
                     .saturating_sub(app.v_scroll)
-                    .saturating_sub(io_box[0].height as usize))
+                    .saturating_sub(io_box[0].height as usize)
+                    // io_box[0].height as usize
+                    .saturating_add(2))
                 .max(0)..(len.saturating_sub(app.v_scroll))
                 {
-                    last_line += app.ports_data[app.active_port_idx].scroll_buffer[i].as_str();
-                    last_line += "\n";
+                    if app.ports_data[app.active_port_idx].scroll_buffer[i].ends_with("\n") {
+                        last_line += &format!(
+                            "{}",
+                            app.ports_data[app.active_port_idx].scroll_buffer[i].as_str(),
+                        );
+                    } else {
+                        last_line += &format!(
+                            "{}{}",
+                            app.ports_data[app.active_port_idx].scroll_buffer[i].as_str(),
+                            "\n"
+                        );
+                    }
                 }
             } else {
                 last_line = format!("{}", io_box[0].height);
@@ -269,11 +285,7 @@ fn main() -> Result<()> {
                 .constraints([Constraint::Percentage(100)])
                 .split(chunks[2]);
 
-            frame.render_widget(
-                Paragraph::new("  quit ▶ Ctrl + q")
-                    .style(Style::default().bg(Color::LightGreen).fg(Color::White)),
-                chunks[2],
-            );
+            frame.render_widget(render_footer(&app.mode), chunks[2]);
         })?;
 
         if let Ok((port_name, recv_data)) = rx.recv_timeout(Duration::from_millis(1)) {
@@ -361,7 +373,7 @@ fn main() -> Result<()> {
                         if key.code == KeyCode::Enter {
                             let mut tmp_data = textarea.lines()[0].clone();
                             tmp_data.push('\n');
-                            port_tx.send(portCommand::Write(tmp_data));
+                            port_tx.send(portCommand::Write(serial::cmdType::Raw(tmp_data)));
                             textarea.delete_line_by_head();
                             *stop_flag.lock().unwrap() = true;
                         } else if key.code == KeyCode::Left {
@@ -373,9 +385,27 @@ fn main() -> Result<()> {
                         {
                             let mut tmp_data = textarea.lines()[0].clone();
                             tmp_data.push(26 as char);
-                            port_tx.send(portCommand::Write(tmp_data));
+                            port_tx.send(portCommand::Write(serial::cmdType::Raw(tmp_data)));
                             textarea.delete_line_by_head();
                             *stop_flag.lock().unwrap() = true;
+                        } else if key.code == KeyCode::Char('d')
+                            && key.modifiers == KeyModifiers::ALT
+                        {
+                            // set data ready level
+                            app.ports_data[app.active_port_idx].dtr =
+                                !app.ports_data[app.active_port_idx].dtr;
+                            port_tx.send(portCommand::Write(serial::cmdType::Dtr(
+                                app.ports_data[app.active_port_idx].dtr,
+                            )));
+                        } else if key.code == KeyCode::Char('r')
+                            && key.modifiers == KeyModifiers::ALT
+                        {
+                            //set terminal ready
+                            app.ports_data[app.active_port_idx].rts =
+                                !app.ports_data[app.active_port_idx].rts;
+                            port_tx.send(portCommand::Write(serial::cmdType::Rts(
+                                app.ports_data[app.active_port_idx].rts,
+                            )));
                         } else {
                             textarea.input(key);
                         }
@@ -397,4 +427,41 @@ fn main() -> Result<()> {
     stdout().execute(LeaveAlternateScreen)?;
     disable_raw_mode()?;
     Ok(())
+}
+
+fn render_footer<'a>(mode: &Mode) -> Paragraph<'a> {
+    const STYLE: Style = Style::new()
+        .fg(Color::White)
+        .bg(Color::LightGreen)
+        .add_modifier(Modifier::BOLD);
+
+    // Style::default().bg(Color::LightGreen).fg(Color::White)
+
+    let line = Line::from(match mode {
+        Mode::Config | Mode::Main | Mode::Term | Mode::Listing => {
+            vec![
+                Span::raw("Quit "),
+                Span::styled(" Alt + q ", STYLE),
+                Span::raw(" Search "),
+                Span::styled("Alt + s ", STYLE),
+                Span::raw(" Scroll "),
+                Span::styled(" 🠕 🠗 ", STYLE),
+            ]
+        }
+        Mode::Writing => vec![
+            Span::raw("Quit "),
+            Span::styled(" Alt + q ", STYLE),
+            Span::raw(" Enter "),
+            Span::styled(r#" \n "#, STYLE),
+            Span::raw(" Ctrl + z "),
+            Span::styled(r#" \x0A "#, STYLE),
+            Span::raw(" Alt+d "),
+            Span::styled(r#" DTR "#, STYLE),
+            Span::raw(" Alt+r "),
+            Span::styled(r#" RTS "#, STYLE),
+        ],
+    });
+
+    Paragraph::new(line)
+    // f.render_widget(, area);
 }

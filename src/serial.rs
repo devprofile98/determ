@@ -10,23 +10,20 @@ use std::{
 
 use serialport::SerialPort;
 
-pub enum cmdType {
+use self::utils::parse_flow;
+
+pub enum CmdType {
     Dtr(bool),
     Rts(bool),
     Raw(String),
 }
 
-pub enum portCommand {
-    Write(cmdType),
+pub enum PortCommand {
+    Write(CmdType),
     ChangePort(String),
 }
 
-pub fn read_line(
-    port: &mut Box<dyn SerialPort>,
-    stop_flag: Arc<Mutex<bool>>,
-    // rx: Receiver<String>,
-    // tx: Sender<String>,
-) -> Option<String> {
+pub fn read_line(port: &mut Box<dyn SerialPort>, stop_flag: Arc<Mutex<bool>>) -> Option<String> {
     let mut serial_buf: Vec<u8> = vec![0; 1];
     let mut big_buffer: Vec<u8> = vec![0; 1000];
 
@@ -38,29 +35,12 @@ pub fn read_line(
                     match std::str::from_utf8(&big_buffer) {
                         Ok(buffer_str) => {
                             if let Some((line, _)) = buffer_str.split_once("\r\n") {
-                                // tx.send(line.to_string()).unwrap();
-                                // big_buffer.clear();
                                 return Some(line.to_owned());
                             } else if let Some((line, _)) = buffer_str.split_once('\n') {
-                                // tx.send(line.to_string()).unwrap();
-                                // big_buffer.clear();
                                 return Some(line.to_owned());
                             }
                         }
                         Err(e) => {
-                            // println!(
-                            //     "Error is {} {:?}",
-                            //     e,
-                            //     std::str::from_utf8(
-                            //         big_buffer
-                            //             .clone()
-                            //             .into_iter()
-                            //             .filter(|c| { c.is_ascii() })
-                            //             .collect::<Vec<u8>>()
-                            //             .as_slice()
-                            //     )
-                            // );
-                            // big_buffer.clear();
                             return None;
                         }
                     }
@@ -77,7 +57,7 @@ pub fn read_line(
 
 pub fn serial_thread(
     ui_tx: Sender<(String, String)>,
-    port_rx: Receiver<portCommand>,
+    port_rx: Receiver<PortCommand>,
     result_tx: Sender<(String, bool)>,
     stop_flag: Arc<Mutex<bool>>,
 ) -> JoinHandle<()> {
@@ -86,7 +66,7 @@ pub fn serial_thread(
         let mut port: Option<Box<dyn SerialPort>> = None;
         let mut port_name = String::new();
         match port_rx.recv().expect("Failed to read the port") {
-            portCommand::ChangePort(req_port_name) => {
+            PortCommand::ChangePort(req_port_name) => {
                 port = Some(
                     serialport::new(&req_port_name, 115_200)
                         .timeout(Duration::from_millis(5))
@@ -103,7 +83,7 @@ pub fn serial_thread(
         loop {
             if let Ok(cmd) = port_rx.recv_timeout(Duration::from_millis(5)) {
                 match cmd {
-                    portCommand::ChangePort(req_name) => {
+                    PortCommand::ChangePort(req_name) => {
                         if let Some(tmp_port) = serial_bookkeeping.get_mut(&req_name.clone()) {
                             port_name = req_name.clone();
                         } else {
@@ -112,47 +92,38 @@ pub fn serial_thread(
                                 .open()
                             {
                                 Ok(p) => {
-                                    // panic!("sdfsdfsdf");
-                                    // port = p;
                                     port_name = req_name.clone();
                                     serial_bookkeeping.insert(port_name.clone(), p);
 
                                     result_tx.send((req_name.clone(), true));
                                 }
                                 Err(_e) => {
-                                    // result_tx.send((port_name.clone(), false));
                                     panic!("{}", _e);
                                 }
                             }
                         }
                     }
-                    portCommand::Write(cmd) => {
-                        match cmd {
-                            cmdType::Raw(data) => {
-                                if let Some(tmp_port) =
-                                    serial_bookkeeping.get_mut(&port_name.clone())
-                                {
-                                    ui_tx.send((port_name.clone(), data.clone()));
-                                    tmp_port.write(data.as_bytes());
-                                    // tmp_port.write_data_terminal_ready(level)
-                                }
-                            }
-                            cmdType::Dtr(level) => {
-                                if let Some(tmp_port) =
-                                    serial_bookkeeping.get_mut(&port_name.clone())
-                                {
-                                    tmp_port.write_data_terminal_ready(level);
-                                }
-                            }
-                            cmdType::Rts(level) => {
-                                if let Some(tmp_port) =
-                                    serial_bookkeeping.get_mut(&port_name.clone())
-                                {
-                                    tmp_port.write_request_to_send(level);
-                                }
+                    PortCommand::Write(cmd) => match cmd {
+                        CmdType::Raw(data) => {
+                            if let Some(tmp_port) = serial_bookkeeping.get_mut(&port_name.clone()) {
+                                ui_tx.send((port_name.clone(), data.clone()));
+                                tmp_port.write(data.as_bytes());
                             }
                         }
-                    }
+                        CmdType::Dtr(level) => {
+                            if let Some(tmp_port) = serial_bookkeeping.get_mut(&port_name.clone()) {
+                                parse_flow(tmp_port, "r1:d0:s1000:d1:r0".to_owned());
+                            }
+                        }
+                        CmdType::Rts(level) => {
+                            if let Some(tmp_port) = serial_bookkeeping.get_mut(&port_name.clone()) {
+                                parse_flow(
+                                    tmp_port,
+                                    "r0:d0:s100:d1:r0:s100:r1:d0:r1:s100:r0:d0".to_owned(),
+                                );
+                            }
+                        }
+                    },
                 }
             } else {
             }
@@ -164,4 +135,35 @@ pub fn serial_thread(
             }
         }
     })
+}
+
+pub mod utils {
+    use serialport::SerialPort;
+    use std::time::Duration;
+
+    pub fn parse_flow(port: &mut Box<dyn SerialPort>, flow_string: String) {
+        for p in flow_string.split(":").collect::<Vec<_>>() {
+            let op = p.as_bytes()[0] as char;
+            let value = p[1..].parse::<u64>().unwrap();
+            // println!("{}- {} ", p, value);
+
+            if op == 'd' {
+                dtr(port, if value == 0 { false } else { true });
+            } else if op == 'r' {
+                rts(port, if value == 0 { false } else { true });
+            } else if op == 's' {
+                sleep(value);
+            } else {
+            }
+        }
+    }
+    fn dtr(port: &mut Box<dyn SerialPort>, level: bool) {
+        port.write_data_terminal_ready(level);
+    }
+    fn rts(port: &mut Box<dyn SerialPort>, level: bool) {
+        port.write_request_to_send(level);
+    }
+    fn sleep(ms: u64) {
+        std::thread::sleep(Duration::from_millis(ms));
+    }
 }

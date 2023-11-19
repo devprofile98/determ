@@ -5,7 +5,6 @@ use crossterm::{
     ExecutableCommand,
 };
 use ratatui::{
-    layout::Rect,
     prelude::{
         Alignment, Backend, Constraint, CrosstermBackend, Direction, Layout, Margin, Terminal,
     },
@@ -16,9 +15,8 @@ use ratatui::{
         Block, Borders, List, ListItem, ListState, Paragraph, Scrollbar, ScrollbarOrientation,
         ScrollbarState,
     },
-    Frame,
 };
-use serial::portCommand;
+use serial::{utils::monitor, PortCommand};
 use serialport::SerialPortInfo;
 use std::{
     collections::VecDeque,
@@ -117,7 +115,7 @@ fn main() -> Result<()> {
     // port.write(output).expect("Write failed!");
 
     let (tx, rx) = channel::<(String, String)>();
-    let (port_tx, port_rx) = channel::<portCommand>();
+    let (port_tx, port_rx) = channel::<PortCommand>();
     let (result_tx, result_rx) = channel::<(String, bool)>();
     stdout().execute(EnterAlternateScreen)?;
     enable_raw_mode()?;
@@ -147,7 +145,7 @@ fn main() -> Result<()> {
         state.select(Some(0));
     }
 
-    if let Err(_e) = port_tx.send(portCommand::ChangePort(
+    if let Err(_e) = port_tx.send(PortCommand::ChangePort(
         app.selected_port(0).unwrap().port_name.clone(),
     )) {
     } else {
@@ -159,8 +157,22 @@ fn main() -> Result<()> {
     }
     let mut temp_v_scroll = 0;
     let mut len = 0;
+    let context = libudev::Context::new().unwrap();
 
     loop {
+        // if let Some(event) = monitor(&context) {
+        //     println!(
+        //         "{}: {} {} (subsystem={}, sysname={}, devtype={})",
+        //         event.sequence_number(),
+        //         event.event_type(),
+        //         event.syspath().map_or("", |s| { s.to_str().unwrap_or("") }),
+        //         event
+        //             .subsystem()
+        //             .map_or("", |s| { s.to_str().unwrap_or("") }),
+        //         event.sysname().map_or("", |s| { s.to_str().unwrap_or("") }),
+        //         event.devtype().map_or("", |s| { s.to_str().unwrap_or("") })
+        //     );
+        // }
         terminal.draw(|frame| {
             let chunks = Layout::default()
                 .direction(Direction::Vertical)
@@ -353,7 +365,7 @@ fn main() -> Result<()> {
                             if !app.is_port_open(
                                 app.ports[state.selected().unwrap()].port_name.clone(),
                             ) {
-                                if let Err(_e) = port_tx.clone().send(portCommand::ChangePort(
+                                if let Err(_e) = port_tx.clone().send(PortCommand::ChangePort(
                                     app.ports[state.selected().unwrap()].port_name.clone(),
                                 )) {
                                     panic!("{}", _e);
@@ -362,7 +374,7 @@ fn main() -> Result<()> {
                                         app.ports[state.selected().unwrap()].port_name.clone();
                                 }
                             } else {
-                                port_tx.clone().send(portCommand::ChangePort(
+                                port_tx.clone().send(PortCommand::ChangePort(
                                     app.ports[state.selected().unwrap()].port_name.clone(),
                                 ));
                                 main_block_title =
@@ -373,9 +385,27 @@ fn main() -> Result<()> {
                         if key.code == KeyCode::Enter {
                             let mut tmp_data = textarea.lines()[0].clone();
                             tmp_data.push('\n');
-                            port_tx.send(portCommand::Write(serial::cmdType::Raw(tmp_data)));
+                            port_tx.send(PortCommand::Write(serial::CmdType::Raw(tmp_data)));
                             textarea.delete_line_by_head();
                             *stop_flag.lock().unwrap() = true;
+                        } else if key.code == KeyCode::Char('d')
+                            && key.modifiers == KeyModifiers::ALT
+                        {
+                            // set data ready level
+                            app.ports_data[app.active_port_idx].dtr =
+                                !app.ports_data[app.active_port_idx].dtr;
+                            port_tx.send(PortCommand::Write(serial::CmdType::Dtr(
+                                app.ports_data[app.active_port_idx].dtr,
+                            )));
+                        } else if key.code == KeyCode::Char('r')
+                            && key.modifiers == KeyModifiers::ALT
+                        {
+                            //set terminal ready
+                            app.ports_data[app.active_port_idx].rts =
+                                !app.ports_data[app.active_port_idx].rts;
+                            port_tx.send(PortCommand::Write(serial::CmdType::Rts(
+                                app.ports_data[app.active_port_idx].rts,
+                            )));
                         } else if key.code == KeyCode::Left {
                             app.mode = Mode::Listing;
                         } else if key.code == KeyCode::Up {
@@ -385,27 +415,9 @@ fn main() -> Result<()> {
                         {
                             let mut tmp_data = textarea.lines()[0].clone();
                             tmp_data.push(26 as char);
-                            port_tx.send(portCommand::Write(serial::cmdType::Raw(tmp_data)));
+                            port_tx.send(PortCommand::Write(serial::CmdType::Raw(tmp_data)));
                             textarea.delete_line_by_head();
                             *stop_flag.lock().unwrap() = true;
-                        } else if key.code == KeyCode::Char('d')
-                            && key.modifiers == KeyModifiers::ALT
-                        {
-                            // set data ready level
-                            app.ports_data[app.active_port_idx].dtr =
-                                !app.ports_data[app.active_port_idx].dtr;
-                            port_tx.send(portCommand::Write(serial::cmdType::Dtr(
-                                app.ports_data[app.active_port_idx].dtr,
-                            )));
-                        } else if key.code == KeyCode::Char('r')
-                            && key.modifiers == KeyModifiers::ALT
-                        {
-                            //set terminal ready
-                            app.ports_data[app.active_port_idx].rts =
-                                !app.ports_data[app.active_port_idx].rts;
-                            port_tx.send(portCommand::Write(serial::cmdType::Rts(
-                                app.ports_data[app.active_port_idx].rts,
-                            )));
                         } else {
                             textarea.input(key);
                         }

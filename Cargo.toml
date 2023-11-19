@@ -10,3 +10,5 @@ serialport = "4.2.2"
 crossterm = "0.27.0"
 ratatui = { version = "0.24.0", features = ["all-widgets"]}
 tui-textarea = "0.3.0"
+libc = "0.2.150"
+libudev = "0.3.0"

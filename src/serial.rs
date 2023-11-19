@@ -166,4 +166,84 @@ pub mod utils {
     fn sleep(ms: u64) {
         std::thread::sleep(Duration::from_millis(ms));
     }
+
+    extern crate libc;
+    extern crate libudev;
+
+    use std::os::unix::io::AsRawFd;
+    use std::ptr;
+
+    use libc::{c_int, c_short, c_ulong, c_void, timespec};
+    use libudev::Event;
+    use libudev::EventType;
+
+    #[repr(C)]
+    struct pollfd {
+        fd: c_int,
+        events: c_short,
+        revents: c_short,
+    }
+
+    #[repr(C)]
+    struct sigset_t {
+        __private: c_void,
+    }
+
+    #[allow(non_camel_case_types)]
+    type nfds_t = c_ulong;
+
+    const POLLIN: c_short = 0x0001;
+
+    extern "C" {
+        fn ppoll(
+            fds: *mut pollfd,
+            nfds: nfds_t,
+            timeout_ts: *mut timespec,
+            sigmask: *const sigset_t,
+        ) -> c_int;
+    }
+
+    pub fn monitor(context: &libudev::Context) -> Option<Event> {
+        if let Ok(mut monitor) = libudev::Monitor::new(context) {
+            if let Err(_e) = monitor.match_subsystem_devtype("usb", "usb_device") {
+                return None;
+            }
+            if let Ok(mut socket) = monitor.listen() {
+                let mut fds = vec![pollfd {
+                    fd: socket.as_raw_fd(),
+                    events: POLLIN,
+                    revents: 0,
+                }];
+
+                // loop {
+                let result = unsafe {
+                    ppoll(
+                        (&mut fds[..]).as_mut_ptr(),
+                        fds.len() as nfds_t,
+                        ptr::null_mut(),
+                        ptr::null(),
+                    )
+                };
+
+                if result < 0 {
+                    // return Err(io::Error::last_os_error());
+                    return None;
+                }
+                println!("TEst!!!!!");
+
+                let event = match socket.receive_event() {
+                    Some(evt) => evt,
+                    None => return None,
+                };
+
+                if event.event_type() == EventType::Add || event.event_type() == EventType::Remove {
+                    return Some(event);
+                }
+                // }
+            }
+
+            // thread::sleep(Duration::from_secs(5));
+        }
+        None
+    }
 }

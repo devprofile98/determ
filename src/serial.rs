@@ -28,21 +28,20 @@ pub fn read_line(port: &mut Box<dyn SerialPort>, stop_flag: Arc<Mutex<bool>>) ->
     let mut big_buffer: Vec<u8> = vec![0; 1000];
 
     loop {
-        if port.bytes_to_read().unwrap_or(0) > 0 {
-            if port.read_exact(&mut serial_buf).is_ok() {
-                big_buffer.push(serial_buf[0]);
-                if serial_buf[0] == '\n' as u8 {
-                    match std::str::from_utf8(&big_buffer) {
-                        Ok(buffer_str) => {
-                            if let Some((line, _)) = buffer_str.split_once("\r\n") {
-                                return Some(line.to_owned());
-                            } else if let Some((line, _)) = buffer_str.split_once('\n') {
-                                return Some(line.to_owned());
-                            }
+        // if port.bytes_to_read().unwrap_or(0) > 0 {
+        if port.read_exact(&mut serial_buf).is_ok() {
+            big_buffer.push(serial_buf[0]);
+            if serial_buf[0] == '\n' as u8 {
+                match std::str::from_utf8(&big_buffer) {
+                    Ok(buffer_str) => {
+                        if let Some((line, _)) = buffer_str.split_once("\r\n") {
+                            return Some(line.to_owned());
+                        } else if let Some((line, _)) = buffer_str.split_once('\n') {
+                            return Some(line.to_owned());
                         }
-                        Err(e) => {
-                            return None;
-                        }
+                    }
+                    Err(e) => {
+                        return None;
                     }
                 }
             }
@@ -50,7 +49,7 @@ pub fn read_line(port: &mut Box<dyn SerialPort>, stop_flag: Arc<Mutex<bool>>) ->
             *stop_flag.lock().unwrap() = false;
             return None;
         }
-        std::thread::sleep(Duration::from_millis(1));
+        std::thread::sleep(Duration::from_micros(100));
     }
     None
 }
@@ -69,7 +68,7 @@ pub fn serial_thread(
             PortCommand::ChangePort(req_port_name) => {
                 port = Some(
                     serialport::new(&req_port_name, 115_200)
-                        .timeout(Duration::from_millis(5))
+                        .timeout(Duration::from_millis(100))
                         .open()
                         .expect("Failed to open port"),
                 );
@@ -125,7 +124,6 @@ pub fn serial_thread(
                         }
                     },
                 }
-            } else {
             }
             if let Some(line_data) = read_line(
                 serial_bookkeeping.get_mut(&port_name.clone()).unwrap(),

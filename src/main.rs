@@ -243,18 +243,30 @@ fn main() -> Result<()> {
                     .saturating_add(2))
                 .max(0)..(len.saturating_sub(app.v_scroll))
                 {
-                    if app.ports_data[app.active_port_idx].scroll_buffer[i].ends_with("\n") {
-                        last_line += &format!(
-                            "{}",
-                            app.ports_data[app.active_port_idx].scroll_buffer[i].as_str(),
-                        );
-                    } else {
-                        last_line += &format!(
-                            "{}{}",
-                            app.ports_data[app.active_port_idx].scroll_buffer[i].as_str(),
-                            "\n"
-                        );
+                    let curr_line = &app.ports_data[app.active_port_idx].scroll_buffer[i];
+                    let line_len = curr_line.len();
+                    let block_width = io_box[0].width as usize;
+                    let mut read_len: usize = 0;
+                    let loop_counter = line_len / block_width;
+                    let mut lasttttt = String::new();
+                    for _i in 0..loop_counter + 1 {
+                        let how_much_to_read = (line_len - read_len).min(block_width);
+                        let block_line = &curr_line[read_len..read_len + how_much_to_read];
+                        let filtered = block_line
+                            .chars()
+                            .filter(|&c| c != '\0')
+                            .collect::<String>();
+                        lasttttt += &filtered;
+                        read_len += how_much_to_read;
+
+                        if read_len >= line_len {
+                            break;
+                        }
                     }
+                    if !curr_line.ends_with("\n") {
+                        lasttttt += "\n";
+                    }
+                    last_line += &lasttttt;
                 }
             } else {
                 last_line = format!("{}", io_box[0].height);
@@ -266,7 +278,7 @@ fn main() -> Result<()> {
                     } else {
                         title_block.clone()
                     }
-                    .title(format!("╮ {} ╭", main_block_title.clone())),
+                    .title(format!("╮ {} ({}*{}) ╭", main_block_title.clone(), io_box[0].width, io_box[0].height))
                 ),
                 io_box[0],
             );
@@ -300,7 +312,7 @@ fn main() -> Result<()> {
             frame.render_widget(render_footer(&app.mode), chunks[2]);
         })?;
 
-        if let Ok((port_name, recv_data)) = rx.recv_timeout(Duration::from_millis(1)) {
+        if let Ok((port_name, recv_data)) = rx.recv_timeout(Duration::from_micros(100)) {
             app.add_data_with_name(port_name, recv_data);
         }
 

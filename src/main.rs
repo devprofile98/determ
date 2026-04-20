@@ -25,7 +25,7 @@ use std::{
     sync::{mpsc::channel, Arc, Mutex},
     time::Duration,
 };
-use tui_textarea::TextArea;
+use tui_textarea::{Input, Key, TextArea};
 
 mod serial;
 
@@ -398,7 +398,8 @@ fn main() -> Result<()> {
                             let mut tmp_data = textarea.lines()[0].clone();
                             tmp_data.push('\n');
                             port_tx.send(PortCommand::Write(serial::CmdType::Raw(tmp_data)));
-                            textarea.delete_line_by_head();
+                            textarea = TextArea::default();
+                            textarea.set_block(Block::default().borders(Borders::ALL).title("write"));
                             *stop_flag.lock().unwrap() = true;
                         } else if key.code == KeyCode::Char('d')
                             && key.modifiers == KeyModifiers::ALT
@@ -418,6 +419,22 @@ fn main() -> Result<()> {
                             port_tx.send(PortCommand::Write(serial::CmdType::Rts(
                                 app.ports_data[app.active_port_idx].rts,
                             )));
+                        } else if key.code == KeyCode::Left
+                            && key.modifiers == KeyModifiers::CONTROL
+                        {
+                            textarea.input(Input {
+                                key: Key::Left,
+                                ctrl: false,
+                                alt: false,
+                            });
+                        } else if key.code == KeyCode::Right
+                            && key.modifiers == KeyModifiers::CONTROL
+                        {
+                            textarea.input(Input {
+                                key: Key::Right,
+                                ctrl: false,
+                                alt: false,
+                            });
                         } else if key.code == KeyCode::Left {
                             app.mode = Mode::Listing;
                         } else if key.code == KeyCode::Up {
@@ -428,7 +445,8 @@ fn main() -> Result<()> {
                             let mut tmp_data = textarea.lines()[0].clone();
                             tmp_data.push(26 as char);
                             port_tx.send(PortCommand::Write(serial::CmdType::Raw(tmp_data)));
-                            textarea.delete_line_by_head();
+                            textarea = TextArea::default();
+                            textarea.set_block(Block::default().borders(Borders::ALL).title("write"));
                             *stop_flag.lock().unwrap() = true;
                         } else {
                             textarea.input(key);
@@ -477,6 +495,8 @@ fn render_footer<'a>(mode: &Mode) -> Paragraph<'a> {
             Span::styled(" Alt + q ", STYLE),
             Span::raw(" Enter "),
             Span::styled(r#" \n "#, STYLE),
+            Span::raw(" Move cursor "),
+            Span::styled(" Ctrl + ←/→ ", STYLE),
             Span::raw(" Ctrl + z "),
             Span::styled(r#" \x0A "#, STYLE),
             Span::raw(" Alt+d "),

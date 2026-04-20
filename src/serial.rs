@@ -1,8 +1,10 @@
 use std::{
     collections::HashMap,
+    io::ErrorKind,
     sync::{
         mpsc::{Receiver, Sender},
-        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+        Arc,
     },
     thread::JoinHandle,
     time::Duration,
@@ -21,46 +23,54 @@ pub enum CmdType {
 pub enum PortCommand {
     Write(CmdType),
     ChangePort(String),
+    PausePort(String),
 }
 
-pub fn read_line(port: &mut Box<dyn SerialPort>, stop_flag: Arc<Mutex<bool>>) -> Option<String> {
-    let mut serial_buf: Vec<u8> = vec![0; 1];
-    let mut big_buffer: Vec<u8> = vec![0; 1000];
-
+pub fn read_line(
+    port: &mut Box<dyn SerialPort>,
+    pending_buffer: &mut Vec<u8>,
+    stop_flag: &AtomicBool,
+) -> Option<String> {
+    let mut serial_buf = [0_u8; 256];
     loop {
-        // if port.bytes_to_read().unwrap_or(0) > 0 {
-        if port.read_exact(&mut serial_buf).is_ok() {
-            big_buffer.push(serial_buf[0]);
-            if serial_buf[0] == '\n' as u8 {
-                match std::str::from_utf8(&big_buffer) {
-                    Ok(buffer_str) => {
-                        if let Some((line, _)) = buffer_str.split_once("\r\n") {
-                            return Some(line.to_owned());
-                        } else if let Some((line, _)) = buffer_str.split_once('\n') {
-                            return Some(line.to_owned());
-                        }
-                    }
-                    Err(e) => {
-                        return None;
-                    }
+        if let Some(newline_idx) = pending_buffer.iter().position(|&byte| byte == b'\n') {
+            let mut line = pending_buffer.drain(..=newline_idx).collect::<Vec<_>>();
+            while matches!(line.last(), Some(b'\n' | b'\r')) {
+                line.pop();
+            }
+
+            return Some(String::from_utf8_lossy(&line).into_owned());
+        }
+
+        match port.read(&mut serial_buf) {
+            Ok(bytes_read) if bytes_read > 0 => {
+                pending_buffer.extend_from_slice(&serial_buf[..bytes_read]);
+            }
+            Ok(_) => {
+                if stop_flag.swap(false, Ordering::Relaxed) {
+                    return None;
                 }
             }
-        } else if *stop_flag.lock().unwrap() {
-            *stop_flag.lock().unwrap() = false;
-            return None;
+            Err(err) if err.kind() == ErrorKind::TimedOut => {
+                if stop_flag.swap(false, Ordering::Relaxed) {
+                    return None;
+                }
+            }
+            Err(_) => {
+                return None;
+            }
         }
-        std::thread::sleep(Duration::from_micros(100));
     }
-    None
 }
 
 pub fn serial_thread(
     ui_tx: Sender<(String, String)>,
     port_rx: Receiver<PortCommand>,
     result_tx: Sender<(String, bool)>,
-    stop_flag: Arc<Mutex<bool>>,
+    stop_flag: Arc<AtomicBool>,
 ) -> JoinHandle<()> {
     let mut serial_bookkeeping = HashMap::new();
+    let mut read_buffers: HashMap<String, Vec<u8>> = HashMap::new();
     std::thread::spawn(move || {
         let mut port: Option<Box<dyn SerialPort>> = None;
         let mut port_name = String::new();
@@ -78,6 +88,7 @@ pub fn serial_thread(
         };
         if port.is_some() {
             serial_bookkeeping.insert(port_name.clone(), port.unwrap());
+            read_buffers.insert(port_name.clone(), Vec::new());
         }
         loop {
             if let Ok(cmd) = port_rx.recv_timeout(Duration::from_millis(5)) {
@@ -93,6 +104,7 @@ pub fn serial_thread(
                                 Ok(p) => {
                                     port_name = req_name.clone();
                                     serial_bookkeeping.insert(port_name.clone(), p);
+                                    read_buffers.entry(port_name.clone()).or_default();
 
                                     result_tx.send((req_name.clone(), true));
                                 }
@@ -101,6 +113,10 @@ pub fn serial_thread(
                                 }
                             }
                         }
+                    }
+                    PortCommand::PausePort(req_name) => {
+                        serial_bookkeeping.remove(&req_name);
+                        read_buffers.remove(&req_name);
                     }
                     PortCommand::Write(cmd) => match cmd {
                         CmdType::Raw(data) => {
@@ -125,11 +141,11 @@ pub fn serial_thread(
                     },
                 }
             }
-            if let Some(line_data) = read_line(
-                serial_bookkeeping.get_mut(&port_name.clone()).unwrap(),
-                stop_flag.clone(),
-            ) {
-                ui_tx.send((port_name.clone(), line_data));
+            if let Some(tmp_port) = serial_bookkeeping.get_mut(&port_name) {
+                let pending_buffer = read_buffers.entry(port_name.clone()).or_default();
+                if let Some(line_data) = read_line(tmp_port, pending_buffer, stop_flag.as_ref()) {
+                    ui_tx.send((port_name.clone(), line_data));
+                }
             }
         }
     })
